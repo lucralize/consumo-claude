@@ -126,6 +126,23 @@ td.heat{text-align:right;min-width:92px}
 .linkbtn{border:0;background:none;color:var(--title);font:inherit;cursor:pointer;padding:0;text-decoration:underline;text-underline-offset:3px}
 .linkbtn:hover{color:var(--accent)}
 
+.badge{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;border:1px solid var(--line);white-space:nowrap}
+.badge.adm{border-color:var(--accent)}
+.badge.off{color:var(--muted)}
+.ucell small{display:block;color:var(--muted)}
+.uhead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
+.uform{border:1px solid var(--line);border-radius:12px;padding:16px;margin-top:14px;background:var(--panel-2)}
+.fgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px 16px;margin-top:10px}
+.fgrid label{display:flex;flex-direction:column;gap:4px;color:var(--muted);font-size:13px}
+input[type="text"],input[type="email"],input[type="search"]{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:7px 10px;min-width:0}
+input[readonly]{opacity:.7}
+.btnrow{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
+.ghost.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.ghost:disabled{opacity:.6;cursor:default}
+.rowbtns{display:flex;gap:8px;flex-wrap:wrap}
+.rowbtns .ghost{padding:4px 10px;font-size:13px}
+.ghost.danger{border-color:var(--accent)}
+
 @media (max-width:860px){ .two{grid-template-columns:1fr} }
 @media (max-width:600px){
   .wrap{padding:18px 14px 44px}
@@ -156,7 +173,7 @@ td.heat{text-align:right;min-width:92px}
       <h1>Consumo do Claude</h1>
       <p class="lead">Consumo de cada membro por produto e por modelo, a partir do relatório de gastos mais recente salvo no SharePoint.</p>
     </div>
-    <div class="who"><span class="nm" id="whoName" hidden></span><button class="ghost" id="logout" type="button" hidden>Sair</button><button class="ghost" id="theme" type="button">Tema</button></div>
+    <div class="who"><span class="nm" id="whoName" hidden></span><button class="ghost" id="usersBtn" type="button" hidden>Usuários</button><button class="ghost" id="logout" type="button" hidden>Sair</button><button class="ghost" id="theme" type="button">Tema</button></div>
   </header>
 
   <label class="drop" id="drop" hidden>
@@ -170,6 +187,39 @@ td.heat{text-align:right;min-width:92px}
   <p class="err" id="err" role="alert" hidden></p>
   <p class="err" id="warn" role="status" hidden></p>
   <div class="srcline" id="srcline" hidden><span id="srcText"></span><button class="linkbtn" id="refresh" type="button">Verificar novo arquivo</button></div>
+
+  <section class="panel" id="usersView" hidden aria-labelledby="h-users">
+    <div class="uhead">
+      <div>
+        <h2 id="h-users">Usuários</h2>
+        <p class="hint">Quem pode entrar. Administrador vê o dashboard e sobe relatórios; Colaborador só visualiza.</p>
+      </div>
+      <button class="ghost primary" id="uNew" type="button">Novo usuário</button>
+    </div>
+    <div class="controls">
+      <label class="ctl">Buscar <input type="search" id="uSearch" placeholder="nome ou e-mail"></label>
+      <label class="ctl">Tipo
+        <select id="uTipoFilter"><option value="">Todos</option><option>Administrador</option><option>Colaborador</option></select>
+      </label>
+    </div>
+    <p class="err" id="uErr" role="alert" hidden></p>
+    <p class="hint" id="uMsg" role="status"></p>
+    <div class="uform" id="uForm" hidden>
+      <h2 id="uFormTitle">Novo usuário</h2>
+      <div class="fgrid">
+        <label>Nome completo <input type="text" id="uNome" autocomplete="off"></label>
+        <label>E-mail (conta Lucralize) <input type="email" id="uEmail" autocomplete="off"></label>
+        <label>Cargo <input type="text" id="uCargo" autocomplete="off"></label>
+        <label>Tipo <select id="uTipo"><option>Colaborador</option><option>Administrador</option></select></label>
+        <label>Situação <select id="uAtivo"><option value="Sim">Ativo</option><option value="Não">Inativo</option></select></label>
+      </div>
+      <div class="btnrow">
+        <button class="ghost primary" id="uSave" type="button">Salvar</button>
+        <button class="ghost" id="uCancel" type="button">Cancelar</button>
+      </div>
+    </div>
+    <div class="scroll"><table id="uTbl"></table></div>
+  </section>
 
   <main id="app" hidden>
     <div class="controls">
@@ -327,7 +377,7 @@ const CFG={
 const SCOPES=['User.Read','Sites.ReadWrite.All'];
 const TIPOS=['Administrador','Colaborador'];
 const LOGOUT_FLAG='cc_logged_out';
-let msalApp=null,token=null,SESSION=null,CUR=null,loadingLatest=false,warnText='';
+let msalApp=null,token=null,SESSION=null,CUR=null,loadingLatest=false,warnText='',view='dash';
 
 function lsGet(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }
 function lsSet(k,v){ try{ localStorage.setItem(k,v); }catch(e){} }
@@ -447,29 +497,234 @@ async function boot(){
 }
 
 /* ---------- usuários: e-mail da conta x tabela tblUsuarios ---------- */
-async function loadUsers(){
-  const full=CFG.base+'/'+CFG.usersFile;
-  let item;
-  try{ item=await graph('GET','/drives/'+CFG.driveId+'/root:/'+pathUrl(full)+'?$select=id'); }
-  catch(e){
-    if(e.status===404) throw fErr('Planilha de usuários não encontrada em '+full+'.');
-    if(e.status===403) throw fErr('Sua conta não tem permissão para abrir a planilha de usuários. Peça acesso à administração.');
-    throw e;
+/* ---------- usuários (planilha tblUsuarios, só Administrador) ---------- */
+let USERS=[],USERCOLS=[],usersFileId=null,recent={},editing=null,uQueue=Promise.resolve();
+const RECENT_MS=5*60*1000;
+const SUPER_ADMIN_NAME='Mateus Araújo';
+const uRank=(t)=>t==='Administrador'?2:1;
+const isProtected=(u)=>String(u.email).toLowerCase()===CFG.superAdmin;
+function canManage(u){
+  return !!SESSION&&SESSION.tipo==='Administrador'&&!isProtected(u)&&String(u.email).toLowerCase()!==SESSION.email;
+}
+function uFriendly(e){
+  if(e&&e.status===403) return 'Sua conta não tem permissão para alterar a planilha de usuários.';
+  return friendly(e);
+}
+async function usersWb(){
+  if(!usersFileId){
+    const full=CFG.base+'/'+CFG.usersFile;
+    try{
+      const item=await graph('GET','/drives/'+CFG.driveId+'/root:/'+pathUrl(full)+'?$select=id');
+      usersFileId=item.id;
+    }catch(e){
+      if(e.status===404) throw fErr('Planilha de usuários não encontrada em '+full+'.');
+      if(e.status===403) throw fErr('Sua conta não tem permissão para abrir a planilha de usuários. Peça acesso à administração.');
+      throw e;
+    }
   }
-  const wb='/drives/'+CFG.driveId+'/items/'+item.id+'/workbook/tables/'+CFG.table;
+  return '/drives/'+CFG.driveId+'/items/'+usersFileId+'/workbook';
+}
+async function readUsersIdx(sid){
+  const wb=await usersWb(), t=wb+'/tables/'+CFG.table, hd=sid?{'workbook-session-id':sid}:undefined;
   let cols;
-  try{ cols=await graph('GET',wb+'/columns?$select=name'); }
+  try{ cols=await graph('GET',t+'/columns?$select=name',null,hd); }
   catch(e){ if(e.status===404) throw fErr('A tabela '+CFG.table+' não foi encontrada na planilha de usuários.'); throw e; }
   const names=cols.value.map((c)=>String(c.name).trim().toLowerCase());
   const miss=['nome','email','tipo','ativo'].filter((n)=>names.indexOf(n)<0);
   if(miss.length) throw fErr('A tabela '+CFG.table+' precisa das colunas: '+miss.join(', ')+'.');
-  const rows=await graph('GET',wb+'/rows');
-  return rows.value.map((r)=>{
+  const rows=await graph('GET',t+'/rows',null,hd);
+  USERCOLS=names;
+  return rows.value.map((r,i)=>{
     const v=r.values[0]||[]; const o={};
-    names.forEach((n,i)=>{ o[n]=String(v[i]==null?'':v[i]).trim(); });
-    return o;
-  }).filter((u)=>u.email);
+    names.forEach((n,j)=>{ o[n]=String(v[j]==null?'':v[j]).trim(); });
+    return {idx:(r.index!=null?r.index:i),raw:v,u:o};
+  }).filter((x)=>x.u.email);
 }
+async function loadUsers(){ return (await readUsersIdx()).map((x)=>x.u); }
+
+const uEnqueue=(fn)=>{ const run=uQueue.then(()=>fn()); uQueue=run.catch(()=>{}); return run; };
+async function withSession(fn){
+  const wb=await usersWb();
+  const s=await graph('POST',wb+'/createSession',{persistChanges:true});
+  try{ return await fn(s.id,wb); }
+  finally{ try{ await graph('POST',wb+'/closeSession',null,{'workbook-session-id':s.id}); }catch(e){ console.warn('closeSession:',e.message); } }
+}
+const uSig=(u)=>[u.nome,String(u.email).toLowerCase(),u.cargo||'',u.tipo,u.ativo].join('\u0001');
+function todaySerial(){ const n=new Date(); return Math.floor(Date.UTC(n.getFullYear(),n.getMonth(),n.getDate())/86400000)+25569; }
+// monta a linha na ordem das colunas da tabela; colunas que a tela não gerencia são preservadas
+function rowValues(u,cur){
+  return USERCOLS.map((n,i)=>{
+    if(n==='nome') return u.nome;
+    if(n==='email') return u.email;
+    if(n==='cargo') return u.cargo||'';
+    if(n==='tipo') return u.tipo;
+    if(n==='ativo') return u.ativo;
+    if(cur) return cur[i]==null?'':cur[i];
+    return n==='criadoem'?todaySerial():'';
+  });
+}
+async function saveUser(u,original){
+  await uEnqueue(()=>withSession(async(sid,wb)=>{
+    const hd={'workbook-session-id':sid}, t=wb+'/tables/'+CFG.table;
+    const rows=await readUsersIdx(sid);
+    const key=u.email.toLowerCase();
+    if(!original){
+      if(rows.some((r)=>r.u.email.toLowerCase()===key)) throw fErr('Já existe um usuário cadastrado com este e-mail.');
+      await graph('POST',t+'/rows/add',{index:null,values:[rowValues(u,null)]},hd);
+    }else{
+      const cur=rows.find((r)=>r.u.email.toLowerCase()===original.email.toLowerCase());
+      if(!cur||uSig(cur.u)!==uSig(original)) throw fErr('Este cadastro foi alterado por outra pessoa. Atualize a lista e tente de novo.');
+      await graph('PATCH',t+'/rows/itemAt(index='+cur.idx+')',{values:[rowValues(u,cur.raw)]},hd);
+    }
+  }));
+  const key=u.email.toLowerCase();
+  recent[key]={ts:Date.now(),user:Object.assign({},u)};
+  const i=USERS.findIndex((x)=>x.email.toLowerCase()===key);
+  if(i>=0) USERS[i]=Object.assign({},USERS[i],u); else USERS.push(Object.assign({},u));
+}
+async function deleteUser(original){
+  await uEnqueue(()=>withSession(async(sid,wb)=>{
+    const rows=await readUsersIdx(sid);
+    const cur=rows.find((r)=>r.u.email.toLowerCase()===original.email.toLowerCase());
+    if(!cur) return;   // já não existe
+    if(uSig(cur.u)!==uSig(original)) throw fErr('Este cadastro foi alterado por outra pessoa. Atualize a lista e tente de novo.');
+    await graph('DELETE',wb+'/tables/'+CFG.table+'/rows/itemAt(index='+cur.idx+')',null,{'workbook-session-id':sid});
+  }));
+  const key=original.email.toLowerCase();
+  recent[key]={ts:Date.now(),user:null};
+  USERS=USERS.filter((x)=>x.email.toLowerCase()!==key);
+}
+// o Excel demora a mostrar o que acabou de ser gravado a quem lê de fora da sessão:
+// lembramos por alguns minutos o que nós mesmos gravamos ou apagamos
+function applyRecent(list){
+  const now=Date.now();
+  Object.keys(recent).forEach((k)=>{
+    const r=recent[k];
+    if(now-r.ts>RECENT_MS){ delete recent[k]; return; }
+    const i=list.findIndex((u)=>u.email.toLowerCase()===k);
+    if(r.user===null){ if(i>=0) list.splice(i,1); }
+    else if(i>=0) list[i]=Object.assign({},list[i],r.user);
+    else list.push(Object.assign({},r.user));
+  });
+  return list;
+}
+
+/* ---------- tela de usuários ---------- */
+function usersToShow(){
+  const list=USERS.slice();
+  if(!list.some((u)=>u.email.toLowerCase()===CFG.superAdmin)) list.unshift({nome:SUPER_ADMIN_NAME,email:CFG.superAdmin,cargo:'',tipo:'Administrador',ativo:'Sim',virtual:true});
+  return list;
+}
+function renderUsers(){
+  const q=($('#uSearch').value||'').toLowerCase(), tf=$('#uTipoFilter').value;
+  let list=usersToShow();
+  if(q) list=list.filter((u)=>u.nome.toLowerCase().indexOf(q)>=0||u.email.toLowerCase().indexOf(q)>=0);
+  if(tf) list=list.filter((u)=>u.tipo===tf);
+  list.sort((a,b)=>(uRank(b.tipo)-uRank(a.tipo))||a.nome.localeCompare(b.nome,'pt-BR'));
+  const tbl=$('#uTbl'); tbl.replaceChildren();
+  const hr=h('tr');
+  ['Usuário','Cargo','Tipo','Situação','Ações'].forEach((c)=>hr.appendChild(h('th',null,c,{scope:'col'})));
+  const th=h('thead'); th.appendChild(hr); tbl.appendChild(th);
+  const tb=h('tbody');
+  if(!list.length){
+    const tr=h('tr'); const td=h('td',null,'Nenhum usuário encontrado.',{colspan:'5'}); tr.appendChild(td); tb.appendChild(tr);
+  }
+  list.forEach((u)=>{
+    const tr=h('tr');
+    const t0=h('td','ucell'); t0.appendChild(h('strong',null,u.nome)); t0.appendChild(h('small',null,u.email)); tr.appendChild(t0);
+    tr.appendChild(h('td',null,u.cargo||'—'));
+    const t2=h('td'); t2.appendChild(h('span','badge'+(u.tipo==='Administrador'?' adm':''),u.tipo)); tr.appendChild(t2);
+    const t3=h('td'); t3.appendChild(h('span','badge'+(u.ativo==='Sim'?'':' off'),u.ativo==='Sim'?'Ativo':'Inativo')); tr.appendChild(t3);
+    const t4=h('td');
+    if(u.virtual||isProtected(u)) t4.appendChild(h('span','badge','Protegido'));
+    else if(SESSION&&u.email.toLowerCase()===SESSION.email) t4.appendChild(h('span','badge','Você'));
+    else if(canManage(u)){
+      const box=h('div','rowbtns');
+      [['edit','Editar'],['toggle',u.ativo==='Sim'?'Desativar':'Ativar'],['delete','Excluir']].forEach((a)=>{
+        const b=h('button','ghost'+(a[0]==='delete'?' danger':''),a[1],{type:'button'});
+        b.dataset.act=a[0]; b.dataset.email=u.email; box.appendChild(b);
+      });
+      t4.appendChild(box);
+    } else t4.appendChild(h('span','zero','—'));
+    tr.appendChild(t4); tb.appendChild(tr);
+  });
+  tbl.appendChild(tb);
+}
+function uMsg(t){ $('#uMsg').textContent=t||''; }
+function uError(t){ const e=$('#uErr'); e.textContent=t||''; e.hidden=!t; }
+async function refreshUsers(){
+  try{
+    const list=await loadUsers();
+    if(!SESSION||SESSION.tipo!=='Administrador') return;   // saiu enquanto carregava
+    USERS=applyRecent(list);
+    uError('');
+  }catch(e){ if(!SESSION) return; console.error(e); uError(uFriendly(e)); }
+  renderUsers();
+}
+function openUsers(){
+  uMsg(''); uError(''); $('#uForm').hidden=true; editing=null;
+  renderUsers();
+  refreshUsers();
+}
+const findUser=(email)=>USERS.find((u)=>u.email.toLowerCase()===String(email).toLowerCase());
+function openForm(email){
+  const orig=email?findUser(email):null;
+  if(email&&(!orig||!canManage(orig))) return;
+  editing=orig; uMsg(''); uError('');
+  $('#uFormTitle').textContent=orig?'Editar usuário':'Novo usuário';
+  $('#uNome').value=orig?orig.nome:'';
+  const em=$('#uEmail'); em.value=orig?orig.email:''; em.readOnly=!!orig;
+  $('#uCargo').value=orig?(orig.cargo||''):'';
+  $('#uTipo').value=orig?orig.tipo:'Colaborador';
+  $('#uAtivo').value=orig?orig.ativo:'Sim';
+  $('#uForm').hidden=false;
+  (orig?$('#uNome'):em).focus();
+}
+function closeForm(){ $('#uForm').hidden=true; editing=null; }
+async function submitForm(){
+  if(!SESSION||SESSION.tipo!=='Administrador') return;
+  uError('');
+  const nome=$('#uNome').value.trim(), email=$('#uEmail').value.trim().toLowerCase();
+  const tipo=$('#uTipo').value, ativo=$('#uAtivo').value, cargo=$('#uCargo').value.trim();
+  if(!nome) return uError('Informe o nome completo.');
+  if(!/^[^\s@;]+@[^\s@;]+\.[^\s@;]+$/.test(email)) return uError('Informe um e-mail válido (conta Lucralize).');
+  if(TIPOS.indexOf(tipo)<0) return uError('Tipo de usuário inválido.');
+  if(editing&&!canManage(editing)) return uError('Você não pode alterar este usuário.');
+  if(email===CFG.superAdmin) return uError('Este e-mail pertence a um administrador fixo do sistema.');
+  const btn=$('#uSave'); btn.disabled=true;
+  try{
+    const wasNew=!editing;
+    await saveUser({nome,email,cargo,tipo,ativo},editing);
+    closeForm(); renderUsers(); uMsg(wasNew?'Usuário cadastrado.':'Usuário atualizado.');
+  }catch(e){ console.error(e); uError(uFriendly(e)); }
+  finally{ btn.disabled=false; }
+}
+async function toggleUser(email){
+  const orig=findUser(email); if(!orig||!canManage(orig)) return;
+  const ativando=orig.ativo!=='Sim';
+  if(!ativando&&!window.confirm('Desativar '+orig.nome+'? A pessoa perde o acesso ao dashboard.')) return;
+  try{ await saveUser(Object.assign({},orig,{ativo:ativando?'Sim':'Não'}),orig); renderUsers(); uMsg(ativando?'Usuário ativado.':'Usuário desativado.'); }
+  catch(e){ console.error(e); uError(uFriendly(e)); }
+}
+async function removeUser(email){
+  const orig=findUser(email); if(!orig||!canManage(orig)) return;
+  if(!window.confirm('Excluir '+orig.nome+' ('+orig.email+') da planilha de usuários? Esta ação não pode ser desfeita.')) return;
+  try{ await deleteUser(orig); renderUsers(); uMsg('Usuário excluído.'); }
+  catch(e){ console.error(e); uError(uFriendly(e)); }
+}
+function setView(v){
+  if(v==='users'&&(!SESSION||SESSION.tipo!=='Administrador')) return;   // só Administrador abre a tela de usuários
+  view=v;
+  const users=v==='users', admin=!!SESSION&&SESSION.tipo==='Administrador';
+  $('#usersView').hidden=!users;
+  $('#app').hidden=users||!state.rows.length;
+  $('#drop').hidden=users||!admin;
+  $('#srcline').hidden=users||!$('#srcText').textContent;
+  if(users) $('#err').hidden=true;
+  $('#usersBtn').textContent=users?'Voltar ao dashboard':'Usuários';
+  if(users) openUsers();
+}
+
 async function authenticate(){
   gateSet({status:'Verificando seu cadastro...'});
   const me=await graph('GET','/me?$select=displayName,mail,userPrincipalName');
@@ -496,12 +751,16 @@ async function enterApp(){
   $('#whoName').hidden=false; $('#logout').hidden=false;
   $('#warn').textContent=warnText; $('#warn').hidden=!warnText;
   $('#drop').hidden=SESSION.tipo!=='Administrador';   // só Administrador sobe relatório
+  $('#usersBtn').hidden=SESSION.tipo!=='Administrador';   // e só Administrador vê o botão Usuários
+  view='dash'; $('#usersView').hidden=true; $('#usersBtn').textContent='Usuários';
   await loadLatest(true);
 }
 function logout(){
   if(!window.confirm('Deseja sair do dashboard?')) return;
   lsSet(LOGOUT_FLAG,'1');
   SESSION=null; token=null; CUR=null;
+  view='dash'; USERS=[]; usersFileId=null; recent={}; editing=null;
+  $('#usersView').hidden=true; $('#usersBtn').hidden=true; $('#usersBtn').textContent='Usuários'; $('#uForm').hidden=true; $('#uTbl').replaceChildren(); uMsg(''); uError('');
   state.rows=[]; state.selected=null;
   ['#kpis','#reads','#chart','#legend','#tbl','#detail','#heat','#byProduct','#byModel'].forEach((s)=>{ const el=$(s); if(el) el.replaceChildren(); });
   $('#app').hidden=true; $('#drop').hidden=true; $('#drop').classList.remove('compact');
@@ -522,7 +781,7 @@ function fmtDateTime(iso){
 function setSrc(text,showRefresh){
   $('#srcText').textContent=text||'';
   $('#refresh').hidden=!showRefresh;
-  $('#srcline').hidden=!text;
+  $('#srcline').hidden=!text||view!=='dash';
 }
 const srcLabel=(c)=>'Exibindo o relatório mais recente do SharePoint: '+c.name+', criado em '+fmtDateTime(c.created)+'.';
 async function listReports(){
@@ -561,6 +820,7 @@ async function loadLatest(force){
     setSrc('Buscando o relatório mais recente no SharePoint...',false);
     let items=[];
     try{ items=await listReports(); }catch(e){ if(e.status!==404) throw e; }
+    if(!SESSION) return;   // saiu enquanto carregava
     const latest=items.length?newest(items):null;
     if(!latest){
       CUR=null;
@@ -572,6 +832,7 @@ async function loadLatest(force){
       return;
     }
     const text=await downloadText(latest);
+    if(!SESSION) return;
     const name=stripStamp(latest.name);
     if(ingest(text,name)){
       CUR={id:latest.id,name,created:latest.createdDateTime};
@@ -612,7 +873,7 @@ async function saveReport(file){
   return res.json();
 }
 async function loadFile(file){
-  if(!file||!SESSION) return;
+  if(!file||!SESSION||view!=='dash') return;
   clearError();
   if(SESSION.tipo!=='Administrador'){ showError('Só Administradores podem subir relatórios.'); return; }
   if(file.size>CFG.maxBytes){ showError('O arquivo tem mais de 4 MB, então não parece um relatório de gastos.'); return; }
@@ -685,8 +946,8 @@ function ingest(text,name){
 
 /* ---------- render ---------- */
 function render(){
-  if(!state.rows.length){ $('#app').hidden=true; return; }
-  $('#app').hidden=false;
+  $('#app').hidden=(view!=='dash'||!state.rows.length);
+  if(!state.rows.length) return;
 
   // controles
   const mb=$('#metric'); mb.replaceChildren();
@@ -1019,6 +1280,18 @@ document.addEventListener('pointerout',(e)=>{
 $('#gateBtn').addEventListener('click',loginClick);
 $('#logout').addEventListener('click',logout);
 $('#refresh').addEventListener('click',()=>loadLatest(false));
+$('#usersBtn').addEventListener('click',()=>setView(view==='users'?'dash':'users'));
+$('#uNew').addEventListener('click',()=>openForm(null));
+$('#uSave').addEventListener('click',submitForm);
+$('#uCancel').addEventListener('click',closeForm);
+$('#uSearch').addEventListener('input',renderUsers);
+$('#uTipoFilter').addEventListener('change',renderUsers);
+$('#uForm').addEventListener('keydown',(e)=>{ if(e.key==='Enter'&&e.target.tagName==='INPUT'){ e.preventDefault(); submitForm(); } else if(e.key==='Escape') closeForm(); });
+$('#uTbl').addEventListener('click',(e)=>{
+  const b=e.target.closest&&e.target.closest('button[data-act]'); if(!b) return;
+  const act=b.dataset.act, em=b.dataset.email;
+  if(act==='edit') openForm(em); else if(act==='toggle') toggleUser(em); else if(act==='delete') removeUser(em);
+});
 boot();
 })();
 </script>
