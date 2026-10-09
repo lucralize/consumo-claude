@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Consumo do Claude | Lucralize</title>
+<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.39.0/lib/msal-browser.min.js" integrity="sha384-HtsDY8wVihpnviltxuJhKpX0ahqMUgvnzrXcW39KBNui4JooW+YJb1YxvQmNoFDZ" crossorigin="anonymous"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@500;700&family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
@@ -111,6 +112,20 @@ td.heat{text-align:right;min-width:92px}
 
 .tip{position:fixed;z-index:20;pointer-events:none;display:none;background:var(--ink);color:var(--bg);padding:6px 9px;border-radius:7px;font-size:12px;max-width:280px}
 
+#gate{position:fixed;inset:0;z-index:100;display:flex;align-items:center;justify-content:center;padding:20px;background:var(--bg)}
+.gate-card{width:100%;max-width:400px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:32px 28px;text-align:center}
+.gate-card h1{font-size:28px}
+.gate-sub{color:var(--muted);margin:10px 0 22px}
+.msbtn{display:inline-flex;align-items:center;justify-content:center;gap:10px;width:100%;padding:11px 16px;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);font:500 14px Poppins,system-ui,sans-serif;cursor:pointer}
+.msbtn:hover:not(:disabled){border-color:var(--accent)}
+.msbtn:disabled{opacity:.6;cursor:default}
+.gate-status{margin:14px 0 0;color:var(--muted);font-size:12.5px;min-height:18px}
+.who{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+.who .nm{color:var(--muted);font-size:13px}
+.srcline{margin-top:12px;color:var(--muted);font-size:13px;display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center}
+.linkbtn{border:0;background:none;color:var(--title);font:inherit;cursor:pointer;padding:0;text-decoration:underline;text-underline-offset:3px}
+.linkbtn:hover{color:var(--accent)}
+
 @media (max-width:860px){ .two{grid-template-columns:1fr} }
 @media (max-width:600px){
   .wrap{padding:18px 14px 44px}
@@ -121,25 +136,40 @@ td.heat{text-align:right;min-width:92px}
 </style>
 </head>
 <body>
+<div id="gate" role="dialog" aria-modal="true" aria-labelledby="gateTitle">
+  <div class="gate-card">
+    <div class="mark">Lucralize</div>
+    <h1 id="gateTitle">Consumo do Claude</h1>
+    <p class="gate-sub">Acesso restrito às contas Lucralize cadastradas.</p>
+    <button class="msbtn" id="gateBtn" type="button" disabled>
+      <svg width="18" height="18" viewBox="0 0 21 21" aria-hidden="true"><rect x="1" y="1" width="9" height="9" fill="#F25022"/><rect x="11" y="1" width="9" height="9" fill="#7FBA00"/><rect x="1" y="11" width="9" height="9" fill="#00A4EF"/><rect x="11" y="11" width="9" height="9" fill="#FFB900"/></svg>
+      <span id="gateLabel">Verificando sessão...</span>
+    </button>
+    <p class="err" id="gateErr" role="alert" hidden></p>
+    <p class="gate-status" id="gateStatus"></p>
+  </div>
+</div>
 <div class="wrap">
   <header class="top">
     <div>
       <div class="mark">Lucralize</div>
       <h1>Consumo do Claude</h1>
-      <p class="lead">Suba o relatório de gastos exportado do painel de admin e veja o consumo de cada membro, por produto e por modelo.</p>
+      <p class="lead">Consumo de cada membro por produto e por modelo, a partir do relatório de gastos mais recente salvo no SharePoint.</p>
     </div>
-    <button class="ghost" id="theme" type="button">Tema</button>
+    <div class="who"><span class="nm" id="whoName" hidden></span><button class="ghost" id="logout" type="button" hidden>Sair</button><button class="ghost" id="theme" type="button">Tema</button></div>
   </header>
 
-  <label class="drop" id="drop">
+  <label class="drop" id="drop" hidden>
     <input type="file" id="file" accept=".csv,text/csv">
     <span class="tx">
       <span class="drop-title" id="dropTitle">Solte aqui o relatório de gastos (.csv)</span>
-      <span class="drop-sub" id="dropSub">Ou clique para escolher o arquivo. No painel de admin: Visão geral, Exportar relatório de gastos. O arquivo é lido só no seu navegador e não é enviado a lugar nenhum.</span>
+      <span class="drop-sub" id="dropSub">Ou clique para escolher o arquivo. No painel de admin: Visão geral, Exportar relatório de gastos. O arquivo é salvo na pasta do dashboard no SharePoint e passa a ser o relatório exibido para todos.</span>
     </span>
-    <span class="swap">Trocar arquivo</span>
+    <span class="swap">Subir novo relatório</span>
   </label>
   <p class="err" id="err" role="alert" hidden></p>
+  <p class="err" id="warn" role="status" hidden></p>
+  <div class="srcline" id="srcline" hidden><span id="srcText"></span><button class="linkbtn" id="refresh" type="button">Verificar novo arquivo</button></div>
 
   <main id="app" hidden>
     <div class="controls">
@@ -282,27 +312,343 @@ function agg(rows,keyFn){
   return [...m.values()];
 }
 
-/* ---------- carga do arquivo ---------- */
+/* ---------- configuração SharePoint (mesmo padrão do central-triagem) ---------- */
+const CFG={
+  clientId:'ee3b78f5-e951-4e57-acde-d5d536dc1f0a',   // app registration SPA exclusivo deste dashboard ("consumo-claude" no Entra ID). Não reaproveitar em outro projeto.
+  tenantId:'5173aa83-66e1-49f3-9128-f2251b43294d',
+  driveId:'b!ekISGx37FUa8VJQoVDwcqosBcJf3ciVJhg2HmW7OU_Skpx_nvEGVTIcQ4XWlDxbZ',   // biblioteca "Operacional"
+  base:'PI - PROCESSOS E INFRA/AUTOMAÇÕES CLAUDE/consumo-claude',
+  reports:'Relatorios',            // subpasta onde os CSVs ficam salvos
+  usersFile:'ConsumoClaude.xlsx',  // planilha de usuários, na pasta base
+  table:'tblUsuarios',
+  superAdmin:'mateusaraujo@lucralize.com.br',
+  maxBytes:4*1024*1024
+};
+const SCOPES=['User.Read','Sites.ReadWrite.All'];
+const TIPOS=['Administrador','Colaborador'];
+const LOGOUT_FLAG='cc_logged_out';
+let msalApp=null,token=null,SESSION=null,CUR=null,loadingLatest=false,warnText='';
+
+function lsGet(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }
+function lsSet(k,v){ try{ localStorage.setItem(k,v); }catch(e){} }
+function lsDel(k){ try{ localStorage.removeItem(k); }catch(e){} }
+const sleep=(ms)=>new Promise((r)=>setTimeout(r,ms));
+const pathUrl=(p)=>p.split('/').map(encodeURIComponent).join('/');
+function fErr(msg){ const e=new Error(msg); e.friendly=true; return e; }
+function friendly(e){
+  if(!e) return 'Erro desconhecido.';
+  if(e.friendly) return e.message;
+  if(e.status===403) return 'Sua conta não tem permissão para abrir os arquivos do dashboard no SharePoint. Peça acesso à administração.';
+  if(e.status===404) return 'Arquivo ou pasta não encontrado no SharePoint. Confira o caminho configurado.';
+  if(/user_cancelled/.test((e.errorCode||'')+(e.message||''))) return 'Login cancelado.';
+  return 'Erro: '+(e.message||e);
+}
+
+/* ---------- MSAL e Graph ---------- */
+async function ensureMsal(){
+  if(msalApp) return msalApp;
+  const app=new msal.PublicClientApplication({
+    auth:{clientId:CFG.clientId,authority:'https://login.microsoftonline.com/'+CFG.tenantId,redirectUri:window.location.origin+window.location.pathname.replace(/index\.html$/,'')},
+    cache:{cacheLocation:'localStorage'}
+  });
+  if(typeof app.initialize==='function') await app.initialize();
+  msalApp=app;
+  return app;
+}
+async function loginPopup(){
+  const app=await ensureMsal();
+  const r=await app.loginPopup({scopes:SCOPES,prompt:'select_account'});
+  if(r.account) app.setActiveAccount(r.account);
+  token=r.accessToken;
+}
+async function renewToken(){
+  const app=await ensureMsal();
+  const account=app.getActiveAccount()||app.getAllAccounts()[0];
+  if(!account) throw fErr('Sessão expirada. Entre novamente.');
+  const r=await app.acquireTokenSilent({scopes:SCOPES,account});
+  token=r.accessToken;
+}
+async function httpErr(res,method,path){
+  const t=await res.text().catch(()=>'');
+  const e=new Error('Graph '+method+' '+path+' -> '+res.status+': '+t);
+  e.status=res.status;
+  return e;
+}
+// renova o token uma vez em 401 e respeita Retry-After em 429/503
+async function graph(method,path,body,extra,tentativa){
+  tentativa=tentativa||0;
+  const headers=Object.assign({'Authorization':'Bearer '+token,'Content-Type':'application/json'},extra||{});
+  const res=await fetch('https://graph.microsoft.com/v1.0'+path,{method,headers,cache:'no-store',body:(method!=='GET'&&body)?JSON.stringify(body):undefined});
+  if(res.status===401&&tentativa===0){ await renewToken(); return graph(method,path,body,extra,1); }
+  if((res.status===429||res.status===503)&&tentativa<4){
+    await sleep(Math.max(1,Number(res.headers.get('Retry-After')||2))*1000);
+    return graph(method,path,body,extra,tentativa+1);
+  }
+  if(!res.ok) throw await httpErr(res,method,path);
+  if(res.status===204) return null;
+  return res.json();
+}
+// para conteúdo de arquivo (download e upload), sem JSON
+async function graphRaw(method,path,body,headers,tentativa){
+  tentativa=tentativa||0;
+  const res=await fetch('https://graph.microsoft.com/v1.0'+path,{method,headers:Object.assign({'Authorization':'Bearer '+token},headers||{}),body,cache:'no-store'});
+  if(res.status===401&&tentativa===0){ await renewToken(); return graphRaw(method,path,body,headers,1); }
+  if(!res.ok) throw await httpErr(res,method,path);
+  return res;
+}
+
+/* ---------- tela de login ---------- */
+function gateSet(o){
+  if('label' in o) $('#gateLabel').textContent=o.label;
+  if('disabled' in o) $('#gateBtn').disabled=o.disabled;
+  if('err' in o){ const e=$('#gateErr'); e.textContent=o.err||''; e.hidden=!o.err; }
+  if('status' in o) $('#gateStatus').textContent=o.status||'';
+  $('#gate').hidden=false;
+}
+function handleAuthError(e){
+  console.error(e);
+  gateSet({disabled:false,status:'',
+    label:e&&e.denied?'Entrar com outra conta':'Entrar com conta Microsoft',
+    err:e&&e.denied?'Sem acesso ao dashboard. Seu e-mail não está cadastrado ou está inativo. Procure a administração.':friendly(e)});
+}
+async function loginClick(){
+  gateSet({disabled:true,label:'Entrando...',err:'',status:''});
+  try{ lsDel(LOGOUT_FLAG); await loginPopup(); await authenticate(); }
+  catch(e){ handleAuthError(e); }
+}
+async function boot(){
+  // a janela de popup do próprio login não deve rodar a inicialização
+  if(window.opener&&window.opener!==window&&/(code=|error=)/.test(location.hash+location.search)) return;
+  if(!CFG.clientId){
+    gateSet({disabled:true,label:'Entrar com conta Microsoft',err:'Falta configurar o Client ID do app registration deste dashboard (CFG.clientId no código).'});
+    return;
+  }
+  if(typeof msal==='undefined'){
+    gateSet({disabled:true,label:'Entrar com conta Microsoft',err:'Não foi possível carregar o login Microsoft (biblioteca bloqueada pela rede).'});
+    return;
+  }
+  try{
+    const app=await ensureMsal();
+    const account=app.getActiveAccount()||app.getAllAccounts()[0];
+    if(account&&!lsGet(LOGOUT_FLAG)){
+      gateSet({disabled:true,label:'Verificando sessão...',err:'',status:''});
+      try{
+        const r=await app.acquireTokenSilent({scopes:SCOPES,account});
+        token=r.accessToken;
+        await authenticate();
+        return;
+      }catch(e){
+        if(e&&(e.denied||e.status||e.friendly)){ handleAuthError(e); return; }
+        console.warn('Sessão silenciosa indisponível:',e);
+      }
+    }
+  }catch(e){ console.error(e); }
+  gateSet({disabled:false,label:'Entrar com conta Microsoft',err:'',status:''});
+}
+
+/* ---------- usuários: e-mail da conta x tabela tblUsuarios ---------- */
+async function loadUsers(){
+  const full=CFG.base+'/'+CFG.usersFile;
+  let item;
+  try{ item=await graph('GET','/drives/'+CFG.driveId+'/root:/'+pathUrl(full)+'?$select=id'); }
+  catch(e){
+    if(e.status===404) throw fErr('Planilha de usuários não encontrada em '+full+'.');
+    if(e.status===403) throw fErr('Sua conta não tem permissão para abrir a planilha de usuários. Peça acesso à administração.');
+    throw e;
+  }
+  const wb='/drives/'+CFG.driveId+'/items/'+item.id+'/workbook/tables/'+CFG.table;
+  let cols;
+  try{ cols=await graph('GET',wb+'/columns?$select=name'); }
+  catch(e){ if(e.status===404) throw fErr('A tabela '+CFG.table+' não foi encontrada na planilha de usuários.'); throw e; }
+  const names=cols.value.map((c)=>String(c.name).trim().toLowerCase());
+  const miss=['nome','email','tipo','ativo'].filter((n)=>names.indexOf(n)<0);
+  if(miss.length) throw fErr('A tabela '+CFG.table+' precisa das colunas: '+miss.join(', ')+'.');
+  const rows=await graph('GET',wb+'/rows');
+  return rows.value.map((r)=>{
+    const v=r.values[0]||[]; const o={};
+    names.forEach((n,i)=>{ o[n]=String(v[i]==null?'':v[i]).trim(); });
+    return o;
+  }).filter((u)=>u.email);
+}
+async function authenticate(){
+  gateSet({status:'Verificando seu cadastro...'});
+  const me=await graph('GET','/me?$select=displayName,mail,userPrincipalName');
+  const emails=[me.mail,me.userPrincipalName].filter(Boolean).map((x)=>x.toLowerCase());
+  const isSuper=emails.indexOf(CFG.superAdmin)>=0;
+  let users=[],loadErr=null;
+  try{ users=await loadUsers(); }catch(e){ loadErr=e; }
+  const row=users.find((u)=>emails.indexOf(u.email.toLowerCase())>=0);
+  if(isSuper){
+    // Administrador fixo no código: entra mesmo se a planilha falhar (modo de recuperação)
+    SESSION={nome:(row&&row.nome)||me.displayName||'Administrador',email:CFG.superAdmin,tipo:'Administrador'};
+    warnText=loadErr?('Modo de recuperação: '+friendly(loadErr)):'';
+  }else{
+    if(loadErr) throw loadErr;
+    if(!row||row.ativo!=='Sim'||TIPOS.indexOf(row.tipo)<0){ const d=new Error('DENIED'); d.denied=true; throw d; }
+    SESSION={nome:row.nome,email:row.email.toLowerCase(),tipo:row.tipo};
+    warnText='';
+  }
+  await enterApp();
+}
+async function enterApp(){
+  $('#gate').hidden=true;
+  $('#whoName').textContent=SESSION.nome+' ('+SESSION.tipo+')';
+  $('#whoName').hidden=false; $('#logout').hidden=false;
+  $('#warn').textContent=warnText; $('#warn').hidden=!warnText;
+  $('#drop').hidden=SESSION.tipo!=='Administrador';   // só Administrador sobe relatório
+  await loadLatest(true);
+}
+function logout(){
+  if(!window.confirm('Deseja sair do dashboard?')) return;
+  lsSet(LOGOUT_FLAG,'1');
+  SESSION=null; token=null; CUR=null;
+  state.rows=[]; state.selected=null;
+  ['#kpis','#reads','#chart','#legend','#tbl','#detail','#heat','#byProduct','#byModel'].forEach((s)=>{ const el=$(s); if(el) el.replaceChildren(); });
+  $('#app').hidden=true; $('#drop').hidden=true; $('#drop').classList.remove('compact');
+  $('#dropTitle').textContent='Solte aqui o relatório de gastos (.csv)';
+  $('#dropSub').textContent=DROP_SUB_EMPTY;
+  $('#srcline').hidden=true; $('#warn').hidden=true; clearError();
+  $('#whoName').hidden=true; $('#logout').hidden=true;
+  gateSet({disabled:false,label:'Entrar com conta Microsoft',err:'',status:''});
+}
+
+/* ---------- relatório mais recente no SharePoint (pelo "Criado em") ---------- */
+const stripStamp=(n)=>n.replace(/^\d{8}-\d{6}_/,'');
+function fmtDateTime(iso){
+  const d=new Date(iso);
+  if(isNaN(d.getTime())) return '';
+  return d.toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+}
+function setSrc(text,showRefresh){
+  $('#srcText').textContent=text||'';
+  $('#refresh').hidden=!showRefresh;
+  $('#srcline').hidden=!text;
+}
+const srcLabel=(c)=>'Exibindo o relatório mais recente do SharePoint: '+c.name+', criado em '+fmtDateTime(c.created)+'.';
+async function listReports(){
+  let url='/drives/'+CFG.driveId+'/root:/'+pathUrl(CFG.base+'/'+CFG.reports)+':/children?$select=id,name,size,createdDateTime,file&$top=200';
+  const out=[]; let guard=0;
+  while(url&&guard++<20){
+    const r=await graph('GET',url);
+    (r.value||[]).forEach((i)=>{ if(i.file&&/\.csv$/i.test(i.name)) out.push(i); });
+    url=r['@odata.nextLink']?r['@odata.nextLink'].replace('https://graph.microsoft.com/v1.0',''):null;
+  }
+  return out;
+}
+// "Criado em" mais recente; em empate, o nome (que começa com data e hora) desempata
+function newest(items){
+  return items.slice().sort((a,b)=>(new Date(b.createdDateTime)-new Date(a.createdDateTime))||b.name.localeCompare(a.name))[0];
+}
+async function downloadText(item){
+  const path='/drives/'+CFG.driveId+'/items/'+item.id;
+  try{
+    const res=await graphRaw('GET',path+'/content');
+    return await res.text();
+  }catch(e){
+    if(!(e instanceof TypeError)) throw e;   // falha de rede/CORS no redirecionamento: tenta o link pré-autenticado
+    const it=await graph('GET',path);
+    const url=it['@microsoft.graph.downloadUrl'];
+    if(!url) throw e;
+    const r=await fetch(url,{cache:'no-store'});
+    if(!r.ok) throw await httpErr(r,'GET','downloadUrl');
+    return r.text();
+  }
+}
+async function loadLatest(force){
+  if(loadingLatest||!SESSION) return;
+  loadingLatest=true; clearError();
+  try{
+    setSrc('Buscando o relatório mais recente no SharePoint...',false);
+    let items=[];
+    try{ items=await listReports(); }catch(e){ if(e.status!==404) throw e; }
+    const latest=items.length?newest(items):null;
+    if(!latest){
+      CUR=null;
+      setSrc(SESSION.tipo==='Administrador'?'Ainda não há relatório salvo. Suba o primeiro para começar.':'Ainda não há relatório salvo. Peça a um Administrador para subir o primeiro.',true);
+      return;
+    }
+    if(!force&&CUR&&CUR.id===latest.id){
+      setSrc(srcLabel(CUR)+' Nenhum arquivo mais novo (verificado às '+new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})+').',true);
+      return;
+    }
+    const text=await downloadText(latest);
+    const name=stripStamp(latest.name);
+    if(ingest(text,name)){
+      CUR={id:latest.id,name,created:latest.createdDateTime};
+      setSrc(srcLabel(CUR),true);
+    }else{
+      setSrc('O arquivo mais recente no SharePoint ('+name+') não pôde ser lido como relatório de gastos.',true);
+    }
+  }catch(e){
+    console.error(e);
+    showError(friendly(e));
+    setSrc('',false);
+  }finally{ loadingLatest=false; }
+}
+
+/* ---------- salvar o relatório subido ---------- */
+function stamp(){
+  const d=new Date(), p=(n)=>String(n).padStart(2,'0');
+  return ''+d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+'-'+p(d.getHours())+p(d.getMinutes())+p(d.getSeconds());
+}
+const safeName=(n)=>n.replace(/[\\/:*?"<>|#%\u0000-\u001f]/g,'_');
+async function ensureReportsFolder(){
+  try{ await graph('POST','/drives/'+CFG.driveId+'/root:/'+pathUrl(CFG.base)+':/children',{name:CFG.reports,folder:{},'@microsoft.graph.conflictBehavior':'fail'}); }
+  catch(e){ if(e.status!==409) throw e; }
+}
+// nome novo a cada envio (data e hora na frente): cada relatório vira um arquivo com "Criado em" próprio.
+// Sobrescrever um arquivo de mesmo nome manteria o Criado em original e o "mais recente" ficaria errado.
+async function saveReport(file){
+  const name=stamp()+'_'+safeName(file.name);
+  const path='/drives/'+CFG.driveId+'/root:/'+pathUrl(CFG.base+'/'+CFG.reports+'/'+name)+':/content?@microsoft.graph.conflictBehavior=rename';
+  const put=()=>graphRaw('PUT',path,file,{'Content-Type':'text/csv'});
+  let res;
+  try{ res=await put(); }
+  catch(e){
+    if(e.status!==404) throw e;
+    await ensureReportsFolder();
+    res=await put();
+  }
+  return res.json();
+}
+async function loadFile(file){
+  if(!file||!SESSION) return;
+  clearError();
+  if(SESSION.tipo!=='Administrador'){ showError('Só Administradores podem subir relatórios.'); return; }
+  if(file.size>CFG.maxBytes){ showError('O arquivo tem mais de 4 MB, então não parece um relatório de gastos.'); return; }
+  let text;
+  try{ text=await file.text(); }catch(e){ showError('Não consegui ler o arquivo. Tente exportar de novo e subir outra vez.'); return; }
+  if(!ingest(text,file.name)) return;   // arquivo inválido não vai para o SharePoint
+  setSrc('Salvando no SharePoint...',false);
+  try{
+    const saved=await saveReport(file);
+    CUR={id:saved.id,name:file.name,created:saved.createdDateTime};
+    setSrc('Salvo no SharePoint. '+srcLabel(CUR),true);
+  }catch(e){
+    console.error(e);
+    showError('O relatório está na tela, mas não foi salvo no SharePoint: '+friendly(e));
+    setSrc('Relatório exibido só nesta sessão, sem salvar.',true);
+  }
+}
+
+/* ---------- leitura e validação do CSV ---------- */
+const DROP_SUB_EMPTY='Ou clique para escolher o arquivo. No painel de admin: Visão geral, Exportar relatório de gastos. O arquivo é salvo na pasta do dashboard no SharePoint e passa a ser o relatório exibido para todos.';
 function showError(msg){ const e=$('#err'); e.textContent=msg; e.hidden=false; }
 function clearError(){ $('#err').hidden=true; }
 
-async function loadFile(file){
-  if(!file) return;
-  clearError();
-  let text;
-  try{ text=await file.text(); }catch(e){ showError('Não consegui ler o arquivo. Tente exportar de novo e subir outra vez.'); return; }
+function ingest(text,name){
   text=text.replace(/^\uFEFF/,'');
   const nl=text.search(/\r|\n/);
   const first=nl<0?text:text.slice(0,nl);
   const delim=first.split(';').length>first.split(',').length?';':',';
   const grid=parseCSV(text,delim);
-  if(grid.length<2){ showError('O arquivo está vazio ou só tem o cabeçalho.'); return; }
+  if(grid.length<2){ showError('O arquivo está vazio ou só tem o cabeçalho.'); return false; }
   const head=grid[0].map((s)=>s.trim().toLowerCase());
   const idx={}; head.forEach((n,i)=>{ idx[n]=i; });
   const missing=REQUIRED.filter((c)=>!(c in idx));
   if(missing.length){
     showError('Este arquivo não parece ser o relatório de gastos. Faltam as colunas: '+missing.join(', ')+'. Use o botão Exportar relatório de gastos do painel de admin.');
-    return;
+    return false;
   }
   const num=(r,c)=>{ if(!(c in idx)) return 0; const v=parseFloat(r[idx[c]]); return isFinite(v)?v:0; };
   const rows=[]; let svcReq=0;
@@ -317,23 +663,24 @@ async function loadFile(file){
     if(!email||email.charAt(0)==='('){ svcReq+=rec.req; continue; }
     rows.push(rec);
   }
-  if(!rows.length){ showError('Nenhuma linha de membro encontrada no arquivo.'); return; }
+  if(!rows.length){ showError('Nenhuma linha de membro encontrada no arquivo.'); return false; }
 
   state.rows=rows; state.svcReq=svcReq; state.hasCache=('total_cache_read_tokens' in idx);
-  state.fileName=file.name; state.period=parsePeriod(file.name);
+  state.fileName=name; state.period=parsePeriod(name);
   state.products=agg(rows,(r)=>r.product).sort((a,b)=>b.req-a.req).map((a)=>a.key);
   state.product='__all'; state.selected=null;
 
   const sel=$('#product'); sel.replaceChildren();
-  const o0=h('option',null,'Todos os produtos',{value:'__all'}); sel.appendChild(o0);
+  sel.appendChild(h('option',null,'Todos os produtos',{value:'__all'}));
   state.products.forEach((p)=>sel.appendChild(h('option',null,p,{value:p})));
 
   const nMembers=new Set(rows.map((r)=>r.email)).size;
   $('#drop').classList.add('compact');
-  $('#dropTitle').textContent=file.name;
-  $('#dropSub').textContent=(state.period?('Período: '+state.period+'. '):'Período não identificado no nome do arquivo. ')+nMembers+' membros, '+rows.length+' linhas. Clique ou solte outro arquivo para trocar.';
+  $('#dropTitle').textContent=name;
+  $('#dropSub').textContent=(state.period?('Período: '+state.period+'. '):'Período não identificado no nome do arquivo. ')+nMembers+' membros, '+rows.length+' linhas. Clique ou solte outro arquivo para subir um novo relatório.';
   $('#periodHint').textContent=state.period?('Relatório de '+state.period+'.'):'Período não identificado no nome do arquivo.';
   render();
+  return true;
 }
 
 /* ---------- render ---------- */
@@ -669,6 +1016,10 @@ document.addEventListener('pointerout',(e)=>{
   const t=e.target.closest&&e.target.closest('[data-tip]');
   if(t) tip.style.display='none';
 });
+$('#gateBtn').addEventListener('click',loginClick);
+$('#logout').addEventListener('click',logout);
+$('#refresh').addEventListener('click',()=>loadLatest(false));
+boot();
 })();
 </script>
 </body>
